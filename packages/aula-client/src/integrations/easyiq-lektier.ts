@@ -114,14 +114,26 @@ export class EasyIqLektierClient {
 
     if (ctx.childIds.length === 0) return { items, raw: rawByChild };
 
-    // Auth uses the FIRST child's userId in x-child — matches the browser:
-    // the iframe mounts with the first child selected, then JS calls
-    // GetChildren to enumerate the rest.
     const firstChildUserId = ctx.childUserIds?.[0];
     if (!firstChildUserId) {
       throw new Error(
         'EasyIQ Lektier needs per-child userId tokens (opaque alphanumeric); none provided',
       );
+    }
+
+    // GetChildren MUST be called before authenticate. authenticate() POSTs to
+    // AuthenticateAulaUser which sets an .AspNetCore.Session cookie that binds
+    // subsequent requests to a school-year session. If GetChildren runs after
+    // authenticate, the server filters by that session's enrolled children —
+    // which can be empty (e.g. when enrollment hasn't been synced for the new
+    // school year). Called without the session cookie, GetChildren returns all
+    // children for the institution filter. GetWeekplanEvents works correctly
+    // either way, so the only ordering constraint is: GetChildren first.
+    let childRows: SpChildRow[];
+    try {
+      childRows = await this.getChildren(ctx, firstChildUserId);
+    } catch (e) {
+      throw new Error(`Lektier GetChildren failed: ${(e as Error).message}`);
     }
 
     let auth: SpAuthResponse;
@@ -131,12 +143,6 @@ export class EasyIqLektierClient {
       throw new Error(`Lektier authenticate failed: ${(e as Error).message}`);
     }
 
-    let childRows: SpChildRow[];
-    try {
-      childRows = await this.getChildren(ctx, firstChildUserId);
-    } catch (e) {
-      throw new Error(`Lektier GetChildren failed: ${(e as Error).message}`);
-    }
     rawByChild.__getChildren = { auth, children: childRows };
 
     const childRowByLogin = new Map<string, SpChildRow>();
